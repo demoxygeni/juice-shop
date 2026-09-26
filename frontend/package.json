@@ -81,7 +81,7 @@
     "stylelint": "^16.10.0",
     "stylelint-config-sass-guidelines": "^12.1.0",
     "stylelint-scss": "^6.0.0",
-    "typescript-eslint": "^8.42.0",
+    "typescript-eslint": "8.70.2-alpha.4",
     "vitest": "^4.1.1"
   },
   "overrides": {
