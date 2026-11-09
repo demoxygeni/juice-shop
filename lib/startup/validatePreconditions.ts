@@ -7,11 +7,11 @@ import pjson from '../../package.json'
 import config from 'config'
 import logger from '../logger'
 import path from 'node:path'
-import colors from 'colors/safe'
+import colors from '../colors'
 import { access, readdir } from 'node:fs/promises'
 import process from 'node:process'
 import semver from 'semver'
-import portscanner from 'portscanner'
+import net from 'node:net'
 import validateDependencies from './validateDependencies'
 
 export interface Dependency {
@@ -38,7 +38,7 @@ export const domainDependencies: Record<string, Dependency> = {
   [config.get<string>('application.chatBot.llmApiUrl')]: {
     dependency: 'LLM API',
     documentation: 'https://howto-llm.owasp-juice.shop',
-    dependentChallenges: ['"Chatbot Prompt Injection" challenge', '"Greedy Chatbot Manipulation" challenge', '"AI Debugging" challenge']
+    dependentChallenges: ['"Chatbot Prompt Injection" challenge', '"Greedy Chatbot Manipulation" challenge', '"AI Debugging" challenge', '"System Prompt Extraction" challenge']
   }
 }
 
@@ -85,14 +85,14 @@ const validatePreconditions = async ({ exitOnFailure = true } = {}) => {
     variableDependencies[llmModel] = {
       dependency: 'LLM Model',
       documentation: 'https://howto-llm.owasp-juice.shop',
-      dependentChallenges: ['"Chatbot Prompt Injection" challenge', '"Greedy Chatbot Manipulation" challenge', '"AI Debugging" challenge']
+      dependentChallenges: ['"Chatbot Prompt Injection" challenge', '"Greedy Chatbot Manipulation" challenge', '"AI Debugging" challenge', '"System Prompt Extraction" challenge']
     }
     preconditionResults[llmModel] = llmModelAvailable
     if (!isOllamaUrl(llmApiUrl)) {
       variableDependencies.LLM_API_KEY = {
         dependency: 'LLM API Key',
         documentation: 'https://howto-llm.owasp-juice.shop',
-        dependentChallenges: ['"Chatbot Prompt Injection" challenge', '"Greedy Chatbot Manipulation" challenge', '"AI Debugging" challenge']
+        dependentChallenges: ['"Chatbot Prompt Injection" challenge', '"Greedy Chatbot Manipulation" challenge', '"AI Debugging" challenge', '"System Prompt Extraction" challenge']
       }
       llmApiKeyEnvVarExists = checkIfEnvironmentVariableExists('LLM_API_KEY')
       preconditionResults.LLM_API_KEY = llmApiKeyEnvVarExists
@@ -176,25 +176,28 @@ export const checkIfDomainReachable = async (domain: string) => {
 
 export const checkIfPortIsAvailable = async (port: number | string) => {
   const portNumber = parseInt(port.toString())
-  return await new Promise((resolve, reject) => {
-    portscanner.checkPortStatus(portNumber, function (error: unknown, status: string) {
-      if (error) {
-        reject(error)
-      } else {
-        if (status === 'open') {
-          logger.warn(`Port ${colors.bold(port.toString())} is in use (${colors.red('ERROR')})`)
-          resolve(false)
-        } else {
-          logger.info(`Port ${colors.bold(port.toString())} is available (${colors.green('SUCCESS')})`)
-          resolve(true)
-        }
-      }
-    })
+  const isOpen = await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket()
+    const done = (open: boolean) => {
+      socket.destroy()
+      resolve(open)
+    }
+    socket.setTimeout(400)
+    socket.once('connect', () => { done(true) })
+    socket.once('timeout', () => { done(false) })
+    socket.once('error', () => { done(false) })
+    socket.connect(portNumber, '127.0.0.1')
   })
+  if (isOpen) {
+    logger.warn(`Port ${colors.bold(port.toString())} is in use (${colors.red('ERROR')})`)
+    return false
+  }
+  logger.info(`Port ${colors.bold(port.toString())} is available (${colors.green('SUCCESS')})`)
+  return true
 }
 
 export const checkIfRequiredFileExists = async (pathRelativeToProjectRoot: string) => {
-  const fileName = pathRelativeToProjectRoot.substr(pathRelativeToProjectRoot.lastIndexOf('/') + 1)
+  const fileName = path.basename(pathRelativeToProjectRoot)
 
   return await access(path.resolve(pathRelativeToProjectRoot)).then(() => {
     logger.info(`Required file ${colors.bold(fileName)} is present (${colors.green('SUCCESS')})`)
@@ -233,7 +236,14 @@ export const isOllamaUrl = (url: string): boolean => {
 export const checkIfLlmModelAvailable = async (llmApiUrl: string) => {
   const model = config.get<string>('application.chatBot.model')
   try {
-    const response = await fetch(`${llmApiUrl}/models`, { signal: AbortSignal.timeout(5000) })
+    const headers: Record<string, string> = {}
+    if (process.env.LLM_API_KEY) {
+      headers.Authorization = `Bearer ${process.env.LLM_API_KEY}`
+    }
+    const response = await fetch(`${llmApiUrl}/models`, {
+      headers,
+      signal: AbortSignal.timeout(5000)
+    })
     if (!response.ok) return false
     const body = await response.json() as { data?: Array<{ id: string }> }
     const availableModels: string[] = (body.data ?? []).map((m: { id: string }) => m.id)

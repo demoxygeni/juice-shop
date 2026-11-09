@@ -219,4 +219,46 @@ describe('ContactComponent', () => {
         component.save()
         expect(component.feedback).toEqual({})
     })
+
+    describe('template rendering', () => {
+        it('should render the customer feedback heading, comment textarea and submit button', () => {
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('h1')).toBeTruthy()
+            expect(compiled.querySelector('textarea#comment')).toBeTruthy()
+            expect(compiled.querySelector('button#submitButton')).toBeTruthy()
+        })
+
+        it('should render the captcha challenge and captcha answer input', () => {
+            component.captcha = '1+1'
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('code#captcha')?.textContent).toContain('1+1')
+            expect(compiled.querySelector('input#captchaControl')).toBeTruthy()
+        })
+
+        it('should keep the submit button disabled while the form is invalid or rating is missing', () => {
+            const compiled: HTMLElement = fixture.nativeElement
+            const submit = compiled.querySelector('button#submitButton') as HTMLButtonElement
+            expect(submit.disabled).toBe(true)
+        })
+
+        it('should not display error messages or render fields as invalid after submitting feedback', () => {
+            component.authorControl.setValue('anonymous')
+            component.feedbackControl.setValue('Great shop!')
+            component.captchaControl.setValue('42')
+            component.rating = 5
+            fixture.detectChanges()
+
+            const form = fixture.nativeElement.querySelector('form') as HTMLFormElement
+            form.dispatchEvent(new Event('submit'))
+            fixture.detectChanges()
+
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('mat-error')).toBeNull()
+            const commentField = compiled.querySelector('textarea#comment')
+            expect(commentField?.getAttribute('aria-invalid')).not.toBe('true')
+            const captchaField = compiled.querySelector('input#captchaControl')
+            expect(captchaField?.getAttribute('aria-invalid')).not.toBe('true')
+        })
+    })
 })

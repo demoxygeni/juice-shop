@@ -1,4 +1,4 @@
-import type { Product as ProductConfig } from '../../../lib/config.types'
+import type { Product as ProductConfig } from '../../../lib/config.schema'
 
 describe('/#/contact', () => {
   beforeEach(() => {
@@ -14,6 +14,7 @@ describe('/#/contact', () => {
     })
 
     it('should be possible to provide feedback as another user', () => {
+      cy.get('#userId').should('have.value', '1')
       cy.get('#userId').then(function ($element) {
         $element[0].removeAttribute('hidden')
         $element[0].removeAttribute('class')
@@ -26,23 +27,18 @@ describe('/#/contact', () => {
 
       cy.visit('/#/administration')
 
-      cy.get(
-        '.customer-table > .mat-mdc-table > :nth-child(8) > .cdk-column-user'
-      ).then(($val) => {
-        if ($val.text() !== ' 2') {
-          cy.get(
-            '.customer-table > .mat-mdc-table > :nth-child(9) > .cdk-column-user'
-          ).should('contain.text', '2')
-        } else {
-          expect($val.text()).contain('2')
-        }
-      })
+      cy.get('.customer-table').should('contain.text', 'Picard stinks!')
+      cy.get('.customer-table mat-row')
+        .contains('Picard stinks!')
+        .parents('mat-row')
+        .find('.cdk-column-user')
+        .should('contain.text', '2')
 
       cy.expectChallengeSolved({ challenge: 'Forged Feedback' })
     })
   })
 
-  describe('challenge "persistedXssFeedback"', () => {
+  describe('challenge "persistedXssFeedbackChallenge"', () => {
     beforeEach(() => {
       cy.login({ email: 'admin', password: 'admin123' })
       cy.visit('/#/contact')
@@ -75,7 +71,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "vulnerableComponent"', () => {
+  describe('challenge "knownVulnerableComponentChallenge"', () => {
     it('should be possible to post known vulnerable component(s) as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.get('#comment').type('sanitize-html 1.4.2 is non-recursive.')
@@ -86,7 +82,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "weirdCrypto"', () => {
+  describe('challenge "weirdCryptoChallenge"', () => {
     it('should be possible to post weird crypto algorithm/library as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.get('#comment').type(
@@ -97,7 +93,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "typosquattingNpm"', () => {
+  describe('challenge "typosquattingNpmChallenge"', () => {
     it('should be possible to post typosquatting NPM package as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.get('#comment').type(
@@ -108,7 +104,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "typosquattingAngular"', () => {
+  describe('challenge "typosquattingAngularChallenge"', () => {
     it('should be possible to post typosquatting NPM package as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.get('#comment').type(
@@ -119,7 +115,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "hiddenImage"', () => {
+  describe('challenge "hiddenImageChallenge"', () => {
     it('should be possible to post hidden character name as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.get('#comment').type(
@@ -130,7 +126,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "zeroStars"', () => {
+  describe('challenge "zeroStarsChallenge"', () => {
     it('should be possible to post feedback with zero stars by double-clicking rating widget', () => {
       cy.visit('/')
       cy.window().then(async () => {
@@ -180,7 +176,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "captchaBypass"', () => {
+  describe('challenge "captchaBypassChallenge"', () => {
     it('should be possible to post 10 or more customer feedbacks in less than 20 seconds', () => {
       cy.window().then(async () => {
         for (let i = 0; i < 15; i++) {
@@ -223,7 +219,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "supplyChainAttack"', () => {
+  describe('challenge "supplyChainAttackChallenge"', () => {
     it('should be possible to post GitHub issue URL reporting malicious eslint-scope package as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.get('#comment').type(
@@ -234,7 +230,7 @@ describe('/#/contact', () => {
     })
   })
 
-  describe('challenge "dlpPastebinDataLeak"', () => {
+  describe('challenge "dlpPastebinDataLeakChallenge"', () => {
     it('should be possible to post dangerous ingredients of unsafe product as feedback', () => {
       cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
       cy.task<ProductConfig>('GetPastebinLeakProduct').then((pastebinLeakProduct: ProductConfig) => {
@@ -244,6 +240,15 @@ describe('/#/contact', () => {
       })
       cy.get('#submitButton').should('not.be.disabled').click()
       cy.expectChallengeSolved({ challenge: 'Leaked Unsafe Product' })
+    })
+  })
+
+  describe('challenge "vulnerableDockerImageChallenge"', () => {
+    it('should be possible to post vulnerable Docker image name and version as feedback', () => {
+      cy.get('#rating').type('{rightarrow}{rightarrow}{rightarrow}')
+      cy.get('#comment').type('The infrastructure uses mongo 4.4.29 which is end-of-life and has known vulnerabilities.')
+      cy.get('#submitButton').should('not.be.disabled').click()
+      cy.expectChallengeSolved({ challenge: 'Vulnerable Infrastructure' })
     })
   })
 })

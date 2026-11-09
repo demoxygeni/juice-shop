@@ -6,11 +6,10 @@
 import { FeedbackService } from '../Services/feedback.service'
 import { CaptchaService } from '../Services/captcha.service'
 import { UserService } from '../Services/user.service'
-import { UntypedFormControl, Validators, FormsModule, ReactiveFormsModule } from '@angular/forms'
-import { Component, type OnInit, inject } from '@angular/core'
+import { UntypedFormControl, Validators, FormsModule, ReactiveFormsModule, NgForm } from '@angular/forms'
+import { Component, type OnInit, inject, ChangeDetectionStrategy, ViewChild } from '@angular/core'
 import { library } from '@fortawesome/fontawesome-svg-core'
 import { faPaperPlane, faStar } from '@fortawesome/free-solid-svg-icons'
-import { FormSubmitService } from '../Services/form-submit.service'
 import { TranslateService, TranslateModule } from '@ngx-translate/core'
 import { SnackBarHelperService } from '../Services/snack-bar-helper.service'
 import { MatButtonModule } from '@angular/material/button'
@@ -25,6 +24,7 @@ import { MatIconModule } from '@angular/material/icon'
 library.add(faStar, faPaperPlane)
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-contact',
   templateUrl: './contact.component.html',
   styleUrls: ['./contact.component.scss'],
@@ -34,7 +34,6 @@ export class ContactComponent implements OnInit {
   private readonly userService = inject(UserService)
   private readonly captchaService = inject(CaptchaService)
   private readonly feedbackService = inject(FeedbackService)
-  private readonly formSubmitService = inject(FormSubmitService)
   private readonly translate = inject(TranslateService)
   private readonly snackBarHelperService = inject(SnackBarHelperService)
 
@@ -42,6 +41,7 @@ export class ContactComponent implements OnInit {
   public feedbackControl: UntypedFormControl = new UntypedFormControl('', [Validators.required, Validators.maxLength(160)])
   public captchaControl: UntypedFormControl = new UntypedFormControl('', [Validators.required, Validators.pattern('-?[\\d]*')])
   public userIdControl: UntypedFormControl = new UntypedFormControl('', [])
+  @ViewChild('feedbackForm', { static: true }) public feedbackForm?: NgForm
   public rating = 0
   public feedback: any = undefined
   public captcha: any
@@ -64,8 +64,6 @@ export class ContactComponent implements OnInit {
       }
     })
     this.getNewCaptcha()
-
-    this.formSubmitService.attachEnterKeyHandler('feedback-form', 'submitButton', () => { this.save() })
   }
 
   getNewCaptcha () {
@@ -130,12 +128,14 @@ export class ContactComponent implements OnInit {
     this.captchaControl.markAsUntouched()
     this.captchaControl.markAsPristine()
     this.captchaControl.setValue('')
+    this.feedbackForm?.resetForm()
   }
 
   resetCaptcha () {
     this.captchaControl.markAsUntouched()
     this.captchaControl.markAsPristine()
     this.captchaControl.setValue('')
+    this.feedbackForm?.resetForm()
   }
 
   formatRating (value: number) {

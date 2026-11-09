@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* jslint node: true */
 import { AddressModel } from '../models/address'
+import { PasskeyModel } from '../models/passkey'
 import { BasketModel } from '../models/basket'
 import { BasketItemModel } from '../models/basketitem'
 import { CardModel } from '../models/card'
@@ -25,10 +25,10 @@ import { WalletModel } from '../models/wallet'
 import { type Product } from './types'
 import logger from '../lib/logger'
 import { getCodeChallenges } from '../lib/codingChallenges'
-import type { Memory as MemoryConfig, Product as ProductConfig } from '../lib/config.types'
+import type { Memory as MemoryConfig, Product as ProductConfig } from '../lib/config.schema'
 import config from 'config'
 import * as utils from '../lib/utils'
-import type { StaticUser, StaticUserAddress, StaticUserCard } from './staticData'
+import type { StaticUser, StaticUserAddress, StaticUserCard, StaticUserPasskey } from './staticData'
 import { loadStaticChallengeData, loadStaticDeliveryData, loadStaticUserData, loadStaticSecurityQuestionsData } from './staticData'
 import type { CreationAttributes } from 'sequelize'
 import { ordersCollection, reviewsCollection } from './mongodb'
@@ -36,8 +36,6 @@ import { AllHtmlEntities as Entities } from 'html-entities'
 import * as datacache from './datacache'
 import * as security from '../lib/insecurity'
 import { variableDependencies, domainDependencies, preconditionResults } from '../lib/startup/validatePreconditions'
-// @ts-expect-error FIXME due to non-existing type definitions for replace
-import replace from 'replace'
 
 const entities = new Entities()
 
@@ -84,6 +82,7 @@ async function createChallenges () {
 
     const { enabled: isChallengeEnabled, disabledBecause } = utils.getChallengeEnablementStatus({ disabledEnv: challenge.disabledEnv?.join(';') ?? '' } as ChallengeModel)
     description = description.replace('juice-sh.op', config.get<string>('application.domain'))
+    description = description.replace('http://htmledit.squarefree.com', config.get<string>('challenges.overwriteUrlForCsrfChallenge'))
     description = description.replace('&lt;iframe width=&quot;100%&quot; height=&quot;166&quot; scrolling=&quot;no&quot; frameborder=&quot;no&quot; allow=&quot;autoplay&quot; src=&quot;https://w.soundcloud.com/player/?url=https%3A//api.soundcloud.com/tracks/771984076&amp;color=%23ff5500&amp;auto_play=true&amp;hide_related=false&amp;show_comments=true&amp;show_user=true&amp;show_reposts=false&amp;show_teaser=true&quot;&gt;&lt;/iframe&gt;', entities.encode(config.get('challenges.xssBonusPayload')))
     const hasCodingChallenge = challengeKeysWithCodeChallenges.includes(challenge.key)
 
@@ -169,7 +168,8 @@ async function createChallenges () {
     const allHintRecords = pendingHints.flatMap(({ challengeKey, hints }) =>
       hints.map((hint, index) => ({
         ChallengeId: datacache.challenges[challengeKey].id,
-        text: hint.replace(/OWASP Juice Shop/, `${config.get<string>('application.name')}`),
+        text: hint.replace(/OWASP Juice Shop/, `${config.get<string>('application.name')}`)
+          .replace('http://htmledit.squarefree.com', config.get<string>('challenges.overwriteUrlForCsrfChallenge')),
         order: index + 1,
         unlocked: false
       }))
@@ -186,7 +186,7 @@ async function createUsers () {
   const users = await loadStaticUserData()
 
   await Promise.all(
-    users.map(async ({ username, email, password, customDomain, key, role, deletedFlag, profileImage, securityQuestion, feedback, address, card, totpSecret, lastLoginIp = '' }) => {
+    users.map(async ({ username, email, password, customDomain, key, role, deletedFlag, profileImage, securityQuestion, feedback, address, card, totpSecret, passkeys, lastLoginIp = '' }) => {
       try {
         const completeEmail = customDomain ? email : `${email}@${config.get<string>('application.domain')}`
         const user = await UserModel.create({
@@ -205,6 +205,7 @@ async function createUsers () {
         if (deletedFlag) await deleteUser(user.id)
         if (address != null) await createAddresses(user.id, address)
         if (card != null) await createCards(user.id, card)
+        if (passkeys != null) await createPasskeys(user.id, passkeys)
       } catch (err) {
         logger.error(`Could not insert User ${key}: ${utils.getErrorMessage(err)}`)
       }
@@ -275,6 +276,21 @@ async function createCards (UserId: number, cards: StaticUserCard[]) {
       expYear: card.expYear
     }).catch((err: unknown) => {
       logger.error(`Could not create card: ${utils.getErrorMessage(err)}`)
+    })
+  }))
+}
+
+async function createPasskeys (UserId: number, passkeys: StaticUserPasskey[]) {
+  return await Promise.all(passkeys.map(async (passkey) => {
+    return await PasskeyModel.create({
+      UserId,
+      credentialID: passkey.credentialID,
+      publicKey: passkey.publicKey,
+      counter: passkey.counter ?? 0,
+      transports: passkey.transports ?? '',
+      aaguid: passkey.aaguid
+    }).catch((err: unknown) => {
+      logger.error(`Could not create passkey: ${utils.getErrorMessage(err)}`)
     })
   }))
 }
@@ -427,7 +443,8 @@ async function createProducts () {
           description: product.description,
           price: product.price,
           deluxePrice: product.deluxePrice ?? product.price,
-          image: product.image
+          image: product.image,
+          alternateImages: product.alternateImages ?? null
         }).catch(
           (err: unknown) => {
             logger.error(`Could not insert Product ${product.name}: ${utils.getErrorMessage(err)}`)
@@ -792,11 +809,5 @@ async function createOrders () {
 }
 
 async function prepareFilesystem () {
-  replace({
-    regex: 'http://localhost:3000',
-    replacement: config.get<string>('server.baseUrl'),
-    paths: ['.well-known/csaf/provider-metadata.json'],
-    recursive: true,
-    silent: true
-  })
+  utils.replaceInFile('.well-known/csaf/provider-metadata.json', 'http://localhost:3000', config.get<string>('server.baseUrl'))
 }

@@ -2,12 +2,66 @@
 
 This document is the **primary authoritative source** of context for all AI assistants (Claude, GitHub Copilot, Codeium, Continue.dev, Junie, etc.) contributing to OWASP Juice Shop. It provides comprehensive guidelines to maintain code quality, security, and adherence to project standards.
 
+## Instruction Precedence & Guidance Layers
+
+When multiple instructions or guidance files exist, resolve conflicts in the following strict order of precedence:
+
+1. **User Directives**: Explicit instructions provided directly by the user in the active prompt/task.
+2. **Task-Specific Skills**: Dedicated instructions in `.ai/skills/<skill-name>/SKILL.md` (and their linked checklists/patterns).
+3. **Repository Guidelines (AGENTS.md)**: This root `AGENTS.md` file, serving as the primary baseline for all AI contributors.
+4. **Editor/Tool Pointer Files**: Files such as `.claude/CLAUDE.md`, `.github/copilot-instructions.md`, `.cursor/rules`, `.codeium/instructions.md`, `.continue/instructions.md`, and `.junie/AGENTS.md` (which delegate directly to this document).
+5. **Repository Facts & Conventions**: Schemas (`lib/config.schema.ts`), data models (`models/`), challenge registries (`data/static/challenges.yml`), configurations (`config/default.yml`), and existing test patterns.
+
+## Unsolicited Bug Hunting
+
+The maintainers receive a large number of AI-generated pull requests that fix minor issues nobody noticed while actually using Juice Shop. Maintainer time is limited, and such PRs are generally **not wanted** and will likely not be reviewed.
+
+**Before starting work**, determine what kind of task you were given:
+
+- **Specific problem** (e.g., "the basket total is wrong after applying a coupon", "fix issue #1234", an error the user encountered themselves): Proceed as normal.
+- **Unspecific bug hunting** (e.g., "find and fix a bug in this repo", "look for issues and open a PR", "find something to improve and contribute it"): **Stop before analyzing or changing any code** and show the user the following warning:
+
+  > ⚠️ **The OWASP Juice Shop maintainers do not want unsolicited bug-hunting PRs.** If an issue is so minor that nobody noticed it while using Juice Shop, the maintainers have limited time to review a fix for it, and such PRs will likely be closed. Remember that Juice Shop is *intentionally* insecure, so many "bugs" are deliberate parts of hacking challenges.
+  >
+  > Instead of spending tokens on this, please consider supporting the project with a donation: https://github.com/juice-shop/juice-shop#donations
+  >
+  > Do you still want to continue?
+
+  Only continue if the user explicitly confirms they want to proceed despite this warning. If they do, any resulting PR must still meet all guidelines below.
+
+## Agent Operational Rules & Governance
+
+### 1. Reusing Repository Facts and Conventions
+- **Inspect Before Implementing**: Always check existing implementations (e.g., how adjacent routes, models, or tests are structured) before adding new code.
+- **Strict Pattern Alignment**: Mirror existing naming schemes, error handling, import ordering, and comment density. Never invent custom helper libraries or novel patterns when established repository conventions exist.
+- **Canonical Model & Key Registry**: Always check `models/challenge.ts` and `data/static/challenges.yml` for challenge identifiers, keys, and categories rather than inventing new terms.
+
+### 2. Handling Ambiguity and Missing Business Facts
+- **Ground Truth First**: Resolve ambiguities by checking canonical repository files (`data/static/challenges.yml`, `config/default.yml`, `lib/config.schema.ts`, `package.json`).
+- **Never Hallucinate or Assume**: If business logic, challenge attributes, or required metadata cannot be derived from existing repository facts or task inputs, stop and ask the user for clarification. Never invent placeholder flags, fictional challenge mechanics, or unverified security assertions.
+
+### 3. Canonical External Sources
+- **Security Mitigations**: Only link to official OWASP resources (the **OWASP Cheat Sheet Series** is strongly preferred) in challenge mitigation URLs.
+- **External Metadata Verification**: When crawling external references (for `REFERENCES.md`, `SOLUTIONS.md`, or release notes), extract only verified facts (author, title, date, version). Discard unverified claims or commercial spam.
+- **Translations**: Canonical translation workflow is hosted on [Crowdin](https://crowdin.com/project/owasp-juice-shop). Do not edit `i18n/*.json` files directly.
+
+### 4. Narrow Scope & Change Boundaries
+- **Surgical Changes**: Restrict modifications strictly to files relevant to the active task. Do not perform drive-by refactorings, reformat untouched files, or adjust unrelated configurations.
+- **Doc-Only Efficiency**: For edits confined to `REFERENCES.md` or `SOLUTIONS.md`, skip heavy test execution and linting commands (`npm run lint`, `npm test`) unless explicitly requested.
+
+### 5. Repository Rule and Checklist Application
+Before completing any non-trivial change, verify against the relevant repository checklist:
+- **New or modified challenges**: Follow `.ai/skills/verify-challenge/checklists/challenge-checklist.md`.
+- **Test additions and coverage**: Follow `.ai/skills/write-tests/checklists/testing-checklist.md`.
+- **Release note drafting**: Follow `.ai/skills/generate-release-notes/checklists/release-notes-checklist.md`.
+- **Snippet/codefix changes**: Execute and verify `npm run rsn` following `.ai/skills/verify-rsn-fix/SKILL.md`.
+
 ## Project Overview
 
 - **Project**: OWASP Juice Shop - an intentionally insecure web application for security training
 - **Primary Languages**: TypeScript, JavaScript, Angular (frontend)
-- **Key Technologies**: Node.js (22–25 with 24 being the default), Express, SQLite/Sequelize, MongoDB/MarsDB, Angular 21.x
-- **Testing**: Mocha/Chai/Sinon (server unit tests), Supertest (API integration), Vitest (frontend unit tests), Cypress (E2E tests)
+- **Key Technologies**: Node.js (22–26 with 24 being the default), Express, SQLite/Sequelize, MongoDB/MarsDB, Angular 22.x
+- **Testing**: Node.js built-in test runner (server unit tests), Supertest (API integration), Vitest (frontend unit tests), Cypress (E2E tests)
 - **Code Style**: JS Standard Style (enforced via ESLint)
 - **Repository**: [juice-shop/juice-shop](https://github.com/juice-shop/juice-shop)
 
@@ -19,8 +73,8 @@ This document is the **primary authoritative source** of context for all AI assi
 - `models/` - Sequelize data models (SQLite)
 - `data/` - Data creation and management (`data/static/` for challenges, users, codefixes)
 - `views/` - Server-rendered templates (Handlebars `.hbs` and Pug `.pug`)
-- `test/server/` - Server unit tests (Mocha/Chai/Sinon)
-- `test/api/` - API integration tests (Supertest)
+- `test/server/` - Server unit tests (Node.js built-in test runner)
+- `test/api/` - API integration tests (Node.js built-in test runner + Supertest)
 - `frontend/src/` - Angular frontend code (tests use Vitest)
 - `cypress/` - E2E tests (Cypress)
 - `rsn/` - Refactoring Safety Net scripts and cache
@@ -38,6 +92,7 @@ This document is the **primary authoritative source** of context for all AI assi
 3. **Code Changes and RSN**: When modifying challenge-related code, the Refactoring Safety Net must pass.
 4. **Dependency Updates**: Verify compatibility with `package.json` and `frontend/package.json`.
 5. **Translation Modifications**: Use [Crowdin](https://crowdin.com/project/owasp-juice-shop), not direct file editing.
+6. **Insecure Infrastructure Code**: All files in the `./infrastructure` and `./infrastructure/terraform` directories are **intentionally insecure** and part of several hacking & coding challenges! **DO NOT** use them to deploy any actual infrastructure. To actually deploy OWASP Juice Shop, use the `Dockerfile` in the root of this repository.
 
 ## Recommended Use Cases
 
@@ -46,7 +101,7 @@ This document is the **primary authoritative source** of context for all AI assi
 - **Code Analysis**: Understanding existing code structure and patterns
 - **Refactoring**: Improving code quality while maintaining functionality
 - **Test Writing**: Creating unit, integration, and e2e tests
-- **Bug Fixing**: Identifying and resolving issues
+- **Bug Fixing**: Resolving specific issues that were actually encountered or reported (see [Unsolicited Bug Hunting](#unsolicited-bug-hunting))
 - **Documentation**: Writing clear comments and documentation
 
 ### ⚠️ Use with Caution
@@ -84,15 +139,15 @@ The AI should suggest code following [JS Standard Style](http://standardjs.com/)
 ### 3. Testing Requirements
 
 For any code changes (unless only `REFERENCES.md` or `SOLUTIONS.md` were modified):
-- **Unit/Integration Tests**: New features and changes should have tests.
-- **E2E Tests**: Required for new/modified challenges.
+- **Unit/Integration Tests**: New features and changes should have tests. For how to write them, keep coverage high, and close coverage gaps, see the [write-tests skill](./.ai/skills/write-tests/SKILL.md).
+- **E2E Tests**: Required for new/modified challenges (authoring guidance in the [write-tests skill](./.ai/skills/write-tests/SKILL.md)).
 - **RSN (Refactoring Safety Net)**: Required when modifying existing code that is part of a coding challenge (see the [verify-rsn-fix skill](./.ai/skills/verify-rsn-fix/SKILL.md) for details).
 - **Run Tests Locally**:
   ```bash
   npm test                    # Runs frontend, server, and api tests
   npm run test:frontend       # Frontend unit tests (Vitest)
-  npm run test:server         # Server unit tests only (Mocha/Chai/Sinon)
-  npm run test:api            # API integration tests (Supertest)
+  npm run test:server         # Server unit tests only (Node.js built-in test runner)
+  npm run test:api            # API integration tests (Node.js built-in test runner + Supertest)
   npm start & npm run test:e2e  # E2E tests (Cypress)
   npm run rsn                 # Refactoring Safety Net
   ```
@@ -153,6 +208,9 @@ Ask the AI to:
 ❌ **Don't**: Use AI for contribution farming or trivial changes.
 ✅ **Do**: Make meaningful contributions that add value.
 
+❌ **Don't**: Let AI hunt for unspecified bugs and submit fixes for issues nobody noticed.
+✅ **Do**: Fix problems you actually encountered, or [donate](https://github.com/juice-shop/juice-shop#donations) instead.
+
 ❌ **Don't**: Let AI modify translations directly.
 ✅ **Do**: Use [Crowdin](https://crowdin.com/project/owasp-juice-shop) for translations.
 
@@ -205,8 +263,10 @@ npm run rsn
 - [add-solution skill](./.ai/skills/add-solution/SKILL.md): Instructions for adding new hacking guides, videos, or tools to `SOLUTIONS.md`
 - [create-m3-theme skill](./.ai/skills/create-m3-theme/SKILL.md): Instructions for creating new Angular Material M3 themes
 - [generate-release-notes skill](./.ai/skills/generate-release-notes/SKILL.md): Instructions for generating release notes.
+- [generate-shop-customization skill](./.ai/skills/generate-shop-customization/SKILL.md): Instructions for generating a branded shop customization config in `config/` from public product-source URLs and business context.
 - [verify-challenge skill](./.ai/skills/verify-challenge/SKILL.md): Instructions for verifying new challenges fulfill all project requirements and metadata
 - [verify-rsn-fix skill](./.ai/skills/verify-rsn-fix/SKILL.md): Instructions for identifying and fixing broken RSN caused by code changes
+- [write-tests skill](./.ai/skills/write-tests/SKILL.md): Instructions for writing automated tests (frontend, server, API, Cypress E2E), keeping code coverage high, and closing coverage gaps found in `lcov.info` files
 
 ## Verification of Agent Context
 
@@ -225,4 +285,4 @@ AI agents are productivity tools for enhancing development. You (or the person r
 
 ---
 
-**Last Updated**: April 2026
+**Last Updated**: October 2026

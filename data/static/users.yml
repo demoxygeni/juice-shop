@@ -273,6 +273,15 @@
   key: LetUsTest
   role: 'admin'
 -
+  email: cloud-admin
+  password: 'DVKH3gn7G$2Rk!f5Tz@9Lm&Qp4Wx#Yj8Bc0Ns6Ue1Io7Ah2Sd4Fg6Hj8Kl0Zx3Cv5Bn7Mq9Wr1Et3Yu5Ip'
+  key: cloudAdmin
+  role: 'admin'
+  profileImage: 'default.svg'
+  securityQuestion:
+    id: 10
+    answer: 'xK9#mP2$vL5nQ8wR3jF6hT0yB7cA4dG1eU'
+-
   email: basil
   password: 'my little nest of vipers'
   key: basil
@@ -281,3 +290,15 @@
   securityQuestion:
     id: 14
     answer: 'English Riviera'
+-
+  email: passkey-user
+  username: passkey-user
+  password: 'FeuLJY3w9zXsGas9HeDNK2aDYARxc42HaKinEyZnqLcdqi8E'
+  key: passkeyUser
+  role: 'customer'
+  passkeys:
+    -
+      credentialID: VfPGsco9UbQv4890ndfO6Go1PCtZ9yEFGWyseVvk4-Y
+      publicKey: pQECAyYgASFYICdISWKC7Mr6wsaotwAhPSmkI9VYOdwpZ2Jkz91Z3QvLIlgg6xFosS504iKBgaI71rqsqEG8220VzwcE9H786P2Z3QY
+      transports: internal
+      aaguid: fbfc3007-154e-4ecc-8c0b-6e020557d7bd

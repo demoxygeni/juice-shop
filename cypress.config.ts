@@ -1,9 +1,10 @@
 import { defineConfig } from 'cypress'
 import * as security from './lib/insecurity'
 import config from 'config'
-import type { Memory as MemoryConfig, Product as ProductConfig } from './lib/config.types'
+import type { Memory as MemoryConfig, Product as ProductConfig } from './lib/config.schema'
 import * as utils from './lib/utils'
 import { generateSync } from 'otplib'
+import { buildAssertion, buildAttestation, loadVictimCredential } from './test/api/helpers/passkey'
 
 export default defineConfig({
   projectId: '3hrkhu',
@@ -73,6 +74,15 @@ export default defineConfig({
         },
         isWindows () {
           return utils.isWindows()
+        },
+        async ForgePasskeyAssertion ({ challenge }: { challenge: string }) {
+          return buildAssertion(await loadVictimCredential(), challenge, { tamper: true })
+        },
+        async ForgePasskeyAttestation ({ challenge }: { challenge: string }) {
+          return buildAttestation((await loadVictimCredential()).credentialID, challenge)
+        },
+        async SignPasskeyAssertion ({ challenge, privateKeyPem }: { challenge: string, privateKeyPem: string }) {
+          return buildAssertion({ ...await loadVictimCredential(), privateKeyPem }, challenge, { tamper: false })
         }
       })
     }

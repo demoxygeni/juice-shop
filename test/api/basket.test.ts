@@ -7,8 +7,13 @@ import { describe, it, before } from 'node:test'
 import assert from 'node:assert/strict'
 import request from 'supertest'
 import type { Express } from 'express'
+import config from 'config'
 import { createTestApp } from './helpers/setup'
 import { login } from './helpers/auth'
+import { QuantityModel } from '../../models/quantity'
+import { WalletModel } from '../../models/wallet'
+import { BasketItemModel } from '../../models/basketitem'
+import * as db from '../../data/mongodb'
 import * as security from '../../lib/insecurity'
 
 let app: Express
@@ -56,7 +61,7 @@ void describe('/rest/basket/:id', () => {
     assert.equal(res.body.data.Products.length, 3)
   })
 
-  void it.skip('GET basket should accept forged JWTs', async () => {
+  void it('GET basket should accept forged JWTs', async () => {
     const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
     const payload = Buffer.from(JSON.stringify({ data: { email: 'jim@juice-sh.op' }, iat: 1508639612, exp: 9999999999 })).toString('base64url')
     const unsignedToken = `${header}.${payload}.`
@@ -159,6 +164,137 @@ void describe('/rest/basket/:id/checkout', () => {
     const res = await request(app).post('/rest/basket/2/checkout').set(authHeader)
     assert.equal(res.status, 200)
     assert.ok(res.body.orderConfirmation !== undefined)
+  })
+
+  void it('POST placing an order applies campaign discount and delivery method for deluxe user', async () => {
+    const { token } = await login(app, {
+      email: 'ciso@' + config.get<string>('application.domain'),
+      password: 'mDLx?94T~1CfVfZMzw@sJ9f?s3L6lbMqE70FfI8^54jbNikY5fymx7c!YbJb'
+    })
+    const deluxeAuthHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+    const validOn = new Date('Mar 08, 2019 00:00:00 GMT+0100').getTime()
+    const couponData = Buffer.from(`WMNSDY2019-${validOn}`).toString('base64')
+
+    const res = await request(app)
+      .post('/rest/basket/5/checkout')
+      .set(deluxeAuthHeader)
+      .send({
+        UserId: 16,
+        couponData,
+        orderDetails: {
+          paymentId: 'card',
+          addressId: 1,
+          deliveryMethodId: 1
+        }
+      })
+
+    assert.equal(res.status, 200)
+    assert.ok(res.body.orderConfirmation !== undefined)
+  })
+
+  void it('POST placing an order charges the wallet when the balance is sufficient', async () => {
+    const { token } = await login(app, {
+      email: 'jim@' + config.get<string>('application.domain'),
+      password: 'ncc-1701'
+    })
+    const jimAuthHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+    const itemRes = await request(app)
+      .post('/api/BasketItems')
+      .set(jimAuthHeader)
+      .send({ BasketId: 2, ProductId: 1, quantity: -100 })
+    assert.equal(itemRes.status, 200)
+
+    const res = await request(app)
+      .post('/rest/basket/2/checkout')
+      .set(jimAuthHeader)
+      .send({
+        UserId: 2,
+        orderDetails: {
+          paymentId: 'wallet'
+        }
+      })
+
+    assert.equal(res.status, 200)
+    assert.ok(res.body.orderConfirmation !== undefined)
+  })
+
+  void it('POST placing an order returns an error when the wallet balance is insufficient', async () => {
+    const { token } = await login(app, { email: 'admin@' + config.get<string>('application.domain'), password: 'admin123' })
+    const adminAuthHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+    const itemRes = await request(app)
+      .post('/api/BasketItems')
+      .set(adminAuthHeader)
+      .send({ BasketId: 1, ProductId: 1, quantity: 1 })
+    assert.equal(itemRes.status, 200)
+
+    const res = await request(app)
+      .post('/rest/basket/1/checkout')
+      .set(adminAuthHeader)
+      .send({ UserId: 1, orderDetails: { paymentId: 'wallet' } })
+
+    assert.equal(res.status, 500)
+    assert.match(res.text, /Insufficient wallet balance/)
+  })
+
+  void describe('error cases', () => {
+    void it('should return 500 if QuantityModel.findOne fails during checkout', async (t) => {
+      const { token } = await login(app, { email: 'bjoern.kimminich@gmail.com', password: 'bW9jLmxpYW1nQGhjaW5pbW1pay5ucmVvamI=' })
+      const authHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+      await request(app).post('/api/BasketItems').set(authHeader).send({ BasketId: 4, ProductId: 1, quantity: 1 })
+
+      t.mock.method(QuantityModel, 'findOne', () => { throw new Error('Quantity error') })
+      const res = await request(app).post('/rest/basket/4/checkout').set(authHeader)
+      assert.equal(res.status, 500)
+      assert.match(res.text, /Quantity error/)
+    })
+
+    void it('should return 500 if WalletModel.findOne fails during checkout', async (t) => {
+      const { token } = await login(app, { email: 'admin@' + config.get<string>('application.domain'), password: 'admin123' })
+      const adminAuthHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+      await request(app).post('/api/BasketItems').set(adminAuthHeader).send({ BasketId: 1, ProductId: 1, quantity: 1 })
+      t.mock.method(WalletModel, 'findOne', () => { throw new Error('Wallet error') })
+
+      const res = await request(app).post('/rest/basket/1/checkout').set(adminAuthHeader).send({ orderDetails: { paymentId: 'wallet' }, UserId: 1 })
+      assert.equal(res.status, 500)
+      assert.match(res.text, /Wallet error/)
+    })
+
+    void it('should return 500 if ordersCollection.insert fails during checkout', async (t) => {
+      const { token } = await login(app, { email: 'admin@' + config.get<string>('application.domain'), password: 'admin123' })
+      const authHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+      await request(app).post('/api/BasketItems').set(authHeader).send({ BasketId: 1, ProductId: 1, quantity: 1 })
+
+      t.mock.method(db.ordersCollection, 'insert', async () => { throw new Error('Insert error') })
+      const res = await request(app).post('/rest/basket/1/checkout').set(authHeader)
+      assert.equal(res.status, 500)
+      assert.match(res.text, /Insert error/)
+    })
+
+    void it('should return 500 if basket item cleanup fails after checkout', async (t) => {
+      const { token } = await login(app, { email: 'admin@' + config.get<string>('application.domain'), password: 'admin123' })
+      const authHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+      await request(app).post('/api/BasketItems').set(authHeader).send({ BasketId: 5, ProductId: 1, quantity: 1 })
+
+      t.mock.method(BasketItemModel, 'destroy', () => { throw new Error('Destroy error') })
+      const res = await request(app).post('/rest/basket/5/checkout').set(authHeader)
+
+      assert.equal(res.status, 500)
+      assert.match(res.text, /Destroy error/)
+    })
+
+    void it('should return 500 if wallet bonus increment fails during checkout', async (t) => {
+      const { token } = await login(app, { email: 'admin@' + config.get<string>('application.domain'), password: 'admin123' })
+      const authHeader = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+      t.mock.method(WalletModel, 'increment', () => { throw new Error('Wallet increment error') })
+
+      const res = await request(app)
+        .post('/rest/basket/1/checkout')
+        .set(authHeader)
+        .send({ UserId: 1, orderDetails: { paymentId: 'card' } })
+
+      assert.equal(res.status, 500)
+      assert.match(res.text, /Wallet increment error/)
+    })
   })
 })
 

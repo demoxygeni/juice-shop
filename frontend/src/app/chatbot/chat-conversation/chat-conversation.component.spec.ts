@@ -225,4 +225,294 @@ describe('ChatConversationComponent', () => {
         component.ngOnInit()
         expect(component.showToolCalls()).toBe(false)
     })
+
+    describe('message editing', () => {
+        beforeEach(() => {
+            component.messages.set([
+                { role: 'user', content: 'First question' },
+                { role: 'assistant', content: 'First answer' },
+                { role: 'user', content: 'Second question' },
+                { role: 'assistant', content: 'Second answer' }
+            ])
+        })
+
+        it('should start editing a user message with its content as draft', () => {
+            component.startEdit(2)
+            expect(component.editingIndex()).toBe(2)
+            expect(component.editDraft()).toBe('Second question')
+        })
+
+        it('should not start editing an assistant message or while a response is loading', () => {
+            component.startEdit(1)
+            expect(component.editingIndex()).toBeNull()
+
+            component.isLoading.set(true)
+            component.startEdit(0)
+            expect(component.editingIndex()).toBeNull()
+        })
+
+        it('should replace the edited message, drop all later messages and regenerate the answer', async () => {
+            async function* contentStream() {
+                yield { deltaContent: 'New answer' }
+            }
+            chatService.streamMessages.mockReturnValue(contentStream())
+
+            component.startEdit(2)
+            component.editDraft.set('Changed question')
+            await component.saveEdit()
+
+            const history = [
+                { role: 'user', content: 'First question' },
+                { role: 'assistant', content: 'First answer' },
+                { role: 'user', content: 'Changed question' }
+            ]
+            expect(chatService.streamMessages).toHaveBeenCalledWith(history)
+            expect(component.messages()).toEqual([...history, { role: 'assistant', content: 'New answer' }])
+            expect(conversationStorage.save.mock.lastCall[0].messages).toEqual(component.messages())
+            expect(component.editingIndex()).toBeNull()
+        })
+
+        it('should not regenerate the answer for an empty or unchanged draft', async () => {
+            component.startEdit(0)
+            component.editDraft.set('   ')
+            await component.saveEdit()
+            expect(component.editingIndex()).toBe(0)
+
+            component.editDraft.set('First question')
+            await component.saveEdit()
+            expect(component.editingIndex()).toBeNull()
+
+            expect(chatService.streamMessages).not.toHaveBeenCalled()
+            expect(component.messages().length).toBe(4)
+        })
+
+        it('should close an open editor when a new message is sent', async () => {
+            async function* emptyStream() { }
+            chatService.streamMessages.mockReturnValue(emptyStream())
+
+            component.startEdit(0)
+            component.editDraft.set('Unsaved draft')
+            await component.sendMessage('Third question')
+
+            expect(component.editingIndex()).toBeNull()
+            expect(component.editDraft()).toBe('')
+            expect(component.messages()[0].content).toBe('First question')
+        })
+    })
+
+    describe('template rendering', () => {
+        it('should render the chat header with back link, avatar and bot title', () => {
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('.chat-header')).toBeTruthy()
+            const back = compiled.querySelector('a.back-link') as HTMLAnchorElement
+            expect(back).toBeTruthy()
+            expect(back.getAttribute('aria-label')).toBe('Back to chatbot')
+            expect(compiled.querySelector('img.header-avatar')).toBeTruthy()
+            expect(compiled.querySelector('.header-title')?.textContent).toContain('Juicy')
+        })
+
+        it('should render an empty chat window and the input area when there are no messages', () => {
+            const compiled: HTMLElement = fixture.nativeElement
+            const chatWindow = compiled.querySelector('.chat-window') as HTMLElement
+            expect(chatWindow).toBeTruthy()
+            expect(chatWindow.querySelectorAll('.chat-bubble').length).toBe(0)
+            expect(compiled.querySelector('.input-area app-chat-input-box')).toBeTruthy()
+        })
+
+        it('should render a user bubble and an assistant bubble with their respective classes and content', () => {
+            component.messages.set([
+                { role: 'user', content: 'Hello bot' },
+                { role: 'assistant', content: 'Hi user' }
+            ] as any)
+            fixture.detectChanges()
+
+            const bubbles = fixture.nativeElement.querySelectorAll('.chat-bubble') as NodeListOf<HTMLElement>
+            expect(bubbles.length).toBe(2)
+            expect(bubbles[0].classList.contains('user')).toBe(true)
+            expect(bubbles[1].classList.contains('assistant')).toBe(true)
+            expect(bubbles[0].textContent).toContain('Hello bot')
+            expect(bubbles[1].textContent).toContain('Hi user')
+        })
+
+        it('should mark an error message with the error class', () => {
+            component.messages.set([
+                { role: 'assistant', content: 'ERROR_KEY', error: true }
+            ] as any)
+            fixture.detectChanges()
+
+            const bubble = fixture.nativeElement.querySelector('.chat-bubble') as HTMLElement
+            expect(bubble.classList.contains('error')).toBe(true)
+        })
+
+        it('should render a typing indicator on the last assistant message while loading', () => {
+            component.isLoading.set(true)
+            component.messages.set([
+                { role: 'user', content: 'Hi' },
+                { role: 'assistant', content: '' }
+            ] as any)
+            fixture.detectChanges()
+
+            const indicator = fixture.nativeElement.querySelector('.typing-indicator')
+            expect(indicator).toBeTruthy()
+            expect(indicator.querySelectorAll('.dot').length).toBe(3)
+        })
+
+        it('should not render any tool-calls container when showToolCalls is false', () => {
+            component.showToolCalls.set(false)
+            component.messages.set([
+                { role: 'assistant', content: 'with tools', tool_calls: [{ id: 't1', type: 'function', function: { name: 'doIt', arguments: '{}' } }] }
+            ] as any)
+            fixture.detectChanges()
+            expect(fixture.nativeElement.querySelector('.tool-calls-container')).toBeNull()
+        })
+
+        it('should render a single tool-call card without the previous-tool-calls header when only one tool call is present', () => {
+            component.showToolCalls.set(true)
+            component.messages.set([
+                { role: 'assistant', content: 'x', tool_calls: [{ id: 't1', type: 'function', function: { name: 'doIt', arguments: '{"a":1}' } }] }
+            ] as any)
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('.tool-calls-container')).toBeTruthy()
+            expect(compiled.querySelector('.tool-calls-header')).toBeNull()
+            const cards = compiled.querySelectorAll('.tool-call-card')
+            expect(cards.length).toBe(1)
+            expect(cards[0].textContent).toContain('doIt')
+            expect(cards[0].textContent).toContain('{"a":1}')
+        })
+
+        it('should toggle previous tool calls visibility when the header is clicked', () => {
+            component.showToolCalls.set(true)
+            component.messages.set([
+                {
+                    role: 'assistant',
+                    content: 'x',
+                    tool_calls: [
+                        { id: 't1', type: 'function', function: { name: 'first', arguments: '{}' } },
+                        { id: 't2', type: 'function', function: { name: 'second', arguments: '{}' } }
+                    ]
+                }
+            ] as any)
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('.tool-calls-header')).toBeTruthy()
+            expect(compiled.querySelector('.previous-tool-calls')).toBeNull()
+
+            ;(compiled.querySelector('.tool-calls-header') as HTMLElement).click()
+            fixture.detectChanges()
+            expect(compiled.querySelector('.previous-tool-calls')).toBeTruthy()
+            expect(compiled.querySelectorAll('.tool-call-card.mini').length).toBe(1)
+        })
+
+        it('should render an edit button only for user messages and not while loading', () => {
+            component.messages.set([
+                { role: 'user', content: 'Hello bot' },
+                { role: 'assistant', content: 'Hi user' }
+            ])
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelectorAll('.edit-message').length).toBe(1)
+            expect(compiled.querySelector('.message-row.user .edit-message')).toBeTruthy()
+
+            component.isLoading.set(true)
+            fixture.detectChanges()
+            expect(compiled.querySelector('.edit-message')).toBeNull()
+        })
+
+        it('should open a focused, prefilled editor that only saves a changed draft', async () => {
+            component.messages.set([{ role: 'user', content: 'Hello bot' }])
+            fixture.detectChanges()
+
+            ;(fixture.nativeElement.querySelector('.edit-message') as HTMLElement).click()
+            fixture.detectChanges()
+            await fixture.whenStable()
+
+            const compiled: HTMLElement = fixture.nativeElement
+            const textarea = compiled.querySelector('.chat-edit-textarea') as HTMLTextAreaElement
+            const save = compiled.querySelector('.chat-edit-save') as HTMLButtonElement
+            expect(compiled.querySelector('.chat-bubble')).toBeNull()
+            expect(textarea.value).toBe('Hello bot')
+            expect(textarea.getAttribute('aria-label')).toBe('CHATBOT_EDIT_MESSAGE')
+            expect(document.activeElement).toBe(textarea)
+            expect(save.disabled).toBe(true)
+
+            component.editDraft.set('Hello there')
+            fixture.detectChanges()
+            expect(save.disabled).toBe(false)
+        })
+
+        it('should cancel via Escape or the cancel button and return focus to the edit button', async () => {
+            component.messages.set([
+                { role: 'user', content: 'First' },
+                { role: 'assistant', content: 'Answer' },
+                { role: 'user', content: 'Second' }
+            ])
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            const secondEditButton = () => compiled.querySelectorAll('.edit-message')[1] as HTMLElement
+
+            secondEditButton().click()
+            fixture.detectChanges()
+            await fixture.whenStable()
+            fixture.nativeElement.querySelector('.chat-edit-textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+            fixture.detectChanges()
+            await fixture.whenStable()
+            expect(component.editingIndex()).toBeNull()
+            expect(document.activeElement).toBe(secondEditButton())
+
+            secondEditButton().click()
+            fixture.detectChanges()
+            ;(compiled.querySelector('.chat-edit-cancel') as HTMLElement).click()
+            fixture.detectChanges()
+            await fixture.whenStable()
+            expect(component.editingIndex()).toBeNull()
+            expect(document.activeElement).toBe(secondEditButton())
+            expect(compiled.querySelectorAll('.chat-bubble.user')[1].textContent).toContain('Second')
+        })
+
+        it('should save on Enter but not on Shift+Enter', () => {
+            const saveSpy = vi.spyOn(component, 'saveEdit').mockResolvedValue()
+            component.messages.set([{ role: 'user', content: 'Hello bot' }])
+            component.startEdit(0)
+            fixture.detectChanges()
+
+            const textarea = fixture.nativeElement.querySelector('.chat-edit-textarea') as HTMLTextAreaElement
+            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true }))
+            expect(saveSpy).not.toHaveBeenCalled()
+
+            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+            expect(saveSpy).toHaveBeenCalledTimes(1)
+        })
+    })
+
+    describe('init configuration handling', () => {
+        it('should log when configuration loading fails', () => {
+            const err = new Error('boom')
+            configurationService.getApplicationConfiguration.mockReturnValue({
+                subscribe: ({ error }: any) => { error(err) }
+            } as any)
+            console.log = vi.fn()
+            component.ngOnInit()
+            expect(console.log).toHaveBeenCalledWith(err)
+        })
+
+        it('should keep default bot name and avatar when config has no chatBot section', () => {
+            configurationService.getApplicationConfiguration.mockReturnValue(of({ application: {} } as any))
+            component.chatBotName.set('Juicy')
+            component.ngOnInit()
+            expect(component.chatBotName()).toBe('Juicy')
+        })
+
+        it('should mark an assistant error message via the stream and break out of the loop', async () => {
+            async function* errStream() {
+                yield { error: true }
+                yield { deltaContent: 'should not be appended' }
+            }
+            chatService.streamMessages.mockReturnValue(errStream())
+            await component.sendMessage('Hi')
+            const assistant = component.messages()[1] as any
+            expect(assistant.error).toBe(true)
+            expect(assistant.content).toBe('CHATBOT_ERROR_LLM_UNREACHABLE')
+        })
+    })
 })

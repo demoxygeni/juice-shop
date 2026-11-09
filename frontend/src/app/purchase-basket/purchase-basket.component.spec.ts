@@ -18,6 +18,7 @@ import { MatButtonToggleModule } from '@angular/material/button-toggle'
 import { PurchaseBasketComponent } from '../purchase-basket/purchase-basket.component'
 import { UserService } from '../Services/user.service'
 import { ProductService } from '../Services/product.service'
+import { QuantityService } from '../Services/quantity.service'
 import { DeluxeGuard } from '../app.guard'
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar'
 import { EventEmitter } from '@angular/core'
@@ -29,6 +30,7 @@ describe('PurchaseBasketComponent', () => {
     let basketService
     let userService
     let productService
+    let quantityService
     let translateService: any
     let deluxeGuard
     let snackBar: any
@@ -42,7 +44,8 @@ describe('PurchaseBasketComponent', () => {
             updateNumberOfCartItems: vi.fn().mockName("BasketService.updateNumberOfCartItems"),
             getGuestBasketItems: vi.fn().mockName("BasketService.getGuestBasketItems"),
             removeGuestBasketItem: vi.fn().mockName("BasketService.removeGuestBasketItem"),
-            updateGuestBasketItemQuantity: vi.fn().mockName("BasketService.updateGuestBasketItemQuantity")
+            updateGuestBasketItemQuantity: vi.fn().mockName("BasketService.updateGuestBasketItemQuantity"),
+            getGuestBasketQuantityViolation: vi.fn().mockName("BasketService.getGuestBasketQuantityViolation")
         }
         basketService.find.mockReturnValue(of({ Products: [] }))
         basketService.del.mockReturnValue(of({}))
@@ -54,6 +57,7 @@ describe('PurchaseBasketComponent', () => {
         })
         basketService.updateGuestBasketItemQuantity.mockImplementation(() => {
         })
+        basketService.getGuestBasketQuantityViolation.mockReturnValue(null)
         userService = {
             whoAmI: vi.fn().mockName("UserService.whoAmI")
         }
@@ -62,6 +66,10 @@ describe('PurchaseBasketComponent', () => {
             get: vi.fn().mockName("ProductService.get")
         }
         productService.get.mockReturnValue(of({ id: 1, name: 'Product', price: 1, deluxePrice: 1 }))
+        quantityService = {
+            getAll: vi.fn().mockName("QuantityService.getAll")
+        }
+        quantityService.getAll.mockReturnValue(of([]))
         translateService = {
             get: vi.fn().mockName("TranslateService.get")
         }
@@ -94,6 +102,7 @@ describe('PurchaseBasketComponent', () => {
                 { provide: MatSnackBar, useValue: snackBar },
                 { provide: UserService, useValue: userService },
                 { provide: ProductService, useValue: productService },
+                { provide: QuantityService, useValue: quantityService },
                 { provide: DeluxeGuard, useValue: deluxeGuard },
                 provideHttpClient(withInterceptorsFromDi()),
                 provideHttpClientTesting()
@@ -321,5 +330,115 @@ describe('PurchaseBasketComponent', () => {
         component.inc(1)
         expect(basketService.get).toHaveBeenCalledWith(1)
         expect(basketService.put).toHaveBeenCalledWith(1, { quantity: 1 })
+    })
+
+    describe('guest basket', () => {
+        beforeEach(() => {
+            localStorage.removeItem('token')
+        })
+
+        it('should reset data, totals and bonus when guest basket is empty', () => {
+            basketService.getGuestBasketItems.mockReturnValue([])
+            component.load()
+            expect(component.dataSource).toEqual([])
+            expect(component.itemTotal).toBe(0)
+            expect(component.bonus).toBe(0)
+        })
+
+        it('should remove guest basket item via BasketService and reload', () => {
+            const loadSpy = vi.spyOn(component, 'load').mockImplementation(() => { })
+            component.delete(42)
+            expect(basketService.removeGuestBasketItem).toHaveBeenCalledWith(42)
+            expect(loadSpy).toHaveBeenCalled()
+        })
+
+        it('should update guest basket item quantity when an existing item is increased', () => {
+            basketService.getGuestBasketItems.mockReturnValue([{ ProductId: 7, quantity: 2 }])
+            const loadSpy = vi.spyOn(component, 'load').mockImplementation(() => { })
+            component.inc(7)
+            expect(basketService.updateGuestBasketItemQuantity).toHaveBeenCalledWith(7, 3)
+            expect(loadSpy).toHaveBeenCalled()
+        })
+
+        it('should ignore quantity changes for unknown guest basket items', () => {
+            basketService.getGuestBasketItems.mockReturnValue([{ ProductId: 7, quantity: 2 }])
+            component.dec(999)
+            expect(basketService.updateGuestBasketItemQuantity).not.toHaveBeenCalled()
+        })
+
+        it('should not increase a guest basket item beyond its per-user limit', () => {
+            quantityService.getAll.mockReturnValue(of([{ ProductId: 7, quantity: 10, limitPerUser: 2 }]))
+            basketService.getGuestBasketItems.mockReturnValue([{ ProductId: 7, quantity: 2 }])
+            basketService.getGuestBasketQuantityViolation.mockReturnValue({ type: 'limit', limitPerUser: 2 })
+            component.load()
+            component.inc(7)
+            expect(basketService.updateGuestBasketItemQuantity).not.toHaveBeenCalled()
+        })
+
+        it('should not increase a guest basket item beyond the available stock', () => {
+            quantityService.getAll.mockReturnValue(of([{ ProductId: 7, quantity: 2, limitPerUser: null }]))
+            basketService.getGuestBasketItems.mockReturnValue([{ ProductId: 7, quantity: 2 }])
+            basketService.getGuestBasketQuantityViolation.mockReturnValue({ type: 'stock' })
+            component.load()
+            component.inc(7)
+            expect(basketService.updateGuestBasketItemQuantity).not.toHaveBeenCalled()
+        })
+
+        it('should allow deluxe users to increase a guest basket item beyond its per-user limit', () => {
+            deluxeGuard.isDeluxe.mockReturnValue(true)
+            quantityService.getAll.mockReturnValue(of([{ ProductId: 7, quantity: 10, limitPerUser: 2 }]))
+            basketService.getGuestBasketItems.mockReturnValue([{ ProductId: 7, quantity: 2 }])
+            component.load()
+            component.inc(7)
+            expect(basketService.updateGuestBasketItemQuantity).toHaveBeenCalledWith(7, 3)
+        })
+    })
+
+    describe('template rendering', () => {
+        it('should render the user email next to the basket title', () => {
+            userService.whoAmI.mockReturnValue(of({ email: 'alice@example.com' }))
+            component.ngOnInit()
+            fixture.detectChanges()
+            const heading = fixture.nativeElement.querySelector('h1 small') as HTMLElement
+            expect(heading.textContent).toContain('(alice@example.com)')
+        })
+
+        it('should render the total price row when totalPrice input is true', () => {
+            component.totalPrice = true
+            component.itemTotal = 42
+            fixture.detectChanges()
+            const total = (fixture.nativeElement as HTMLElement).querySelector('#price') as HTMLElement
+            expect(total).toBeTruthy()
+            expect(total.textContent).toContain('42')
+        })
+
+        it('should hide the total price row when totalPrice input is false', () => {
+            component.totalPrice = false
+            fixture.detectChanges()
+            expect((fixture.nativeElement as HTMLElement).querySelector('#price')).toBeNull()
+        })
+
+        it('should not render edit (plus/minus/remove) buttons when allowEdit is false', () => {
+            basketService.find.mockReturnValue(of({ Products: [{ name: 'P1', image: 'p1.png', price: 1, deluxePrice: 1, BasketItem: { id: 1, quantity: 1 } }] }))
+            component.allowEdit = false
+            component.load()
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(compiled.querySelector('.fa-plus-square')).toBeNull()
+            expect(compiled.querySelector('.fa-minus-square')).toBeNull()
+            expect(compiled.querySelector('.fa-trash-alt')).toBeNull()
+        })
+
+        it('should render edit buttons and add the remove column when allowEdit is true', () => {
+            basketService.find.mockReturnValue(of({ Products: [{ name: 'P1', image: 'p1.png', price: 1, deluxePrice: 1, BasketItem: { id: 1, quantity: 1 } }] }))
+            component.allowEdit = true
+            component.ngOnInit()
+            fixture.detectChanges()
+            const compiled: HTMLElement = fixture.nativeElement
+            expect(component.tableColumns).toContain('remove')
+            expect(compiled.querySelector('.fa-plus-square')).toBeTruthy()
+            expect(compiled.querySelector('.fa-minus-square')).toBeTruthy()
+            expect(compiled.querySelector('.fa-trash-alt')).toBeTruthy()
+        })
     })
 })

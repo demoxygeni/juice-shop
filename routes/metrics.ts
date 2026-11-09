@@ -20,31 +20,49 @@ import * as accuracy from '../lib/accuracy'
 import { reviewsCollection, ordersCollection } from '../data/mongodb'
 import { challenges } from '../data/datacache'
 import * as Prometheus from 'prom-client'
-import onFinished from 'on-finished'
+import { finished } from 'node:stream'
 
 const register = Prometheus.register
 
-const fileUploadsCountMetric = new Prometheus.Counter({
+let fileUploadsCountMetric = new Prometheus.Counter({
   name: 'file_uploads_count',
   help: 'Total number of successful file uploads grouped by file type.',
   labelNames: ['file_type']
 })
 
-const fileUploadErrorsMetric = new Prometheus.Counter({
+let fileUploadErrorsMetric = new Prometheus.Counter({
   name: 'file_upload_errors',
   help: 'Total number of failed file uploads grouped by file type.',
   labelNames: ['file_type']
 })
 
-const httpRequestsMetric = new Prometheus.Counter({
+let httpRequestsMetric = new Prometheus.Counter({
   name: 'http_requests_count',
   help: 'Total HTTP request count grouped by status code.',
   labelNames: ['status_code']
 })
 
+export function reRegisterMetrics () {
+  fileUploadsCountMetric = new Prometheus.Counter({
+    name: 'file_uploads_count',
+    help: 'Total number of successful file uploads grouped by file type.',
+    labelNames: ['file_type']
+  })
+  fileUploadErrorsMetric = new Prometheus.Counter({
+    name: 'file_upload_errors',
+    help: 'Total number of failed file uploads grouped by file type.',
+    labelNames: ['file_type']
+  })
+  httpRequestsMetric = new Prometheus.Counter({
+    name: 'http_requests_count',
+    help: 'Total HTTP request count grouped by status code.',
+    labelNames: ['status_code']
+  })
+}
+
 export function observeRequestMetricsMiddleware () {
   return (req: Request, res: Response, next: NextFunction) => {
-    onFinished(res, () => {
+    finished(res, () => {
       const statusCode = `${Math.floor(res.statusCode / 100)}XX`
       httpRequestsMetric.labels(statusCode).inc()
     })
@@ -54,7 +72,7 @@ export function observeRequestMetricsMiddleware () {
 
 export function observeFileUploadMetricsMiddleware () {
   return ({ file }: Request, res: Response, next: NextFunction) => {
-    onFinished(res, () => {
+    finished(res, () => {
       if (file != null) {
         res.statusCode < 400 ? fileUploadsCountMetric.labels(file.mimetype).inc() : fileUploadErrorsMetric.labels(file.mimetype).inc()
       }

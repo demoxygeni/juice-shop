@@ -4,7 +4,9 @@
  */
 
 import config from 'config'
-import colors from 'colors/safe'
+import colors from './colors'
+import path from 'path'
+import fs from 'fs'
 import { retrieveCodeSnippet } from '../routes/vulnCodeSnippet'
 import { readFixes } from '../routes/vulnCodeFixes'
 import { type Challenge } from '../data/types'
@@ -12,9 +14,7 @@ import { getCodeChallenges } from './codingChallenges'
 import logger from './logger'
 import { type NextFunction, type Request, type Response } from 'express'
 import * as utils from './utils'
-// @ts-expect-error FIXME due to non-existing type definitions for median
-import median from 'median'
-import { type ChallengeKey } from 'models/challenge'
+import { type ChallengeKey } from '@juice-shop/models/challenge'
 
 const tightlyCoupledChallenges = {
   loginAdminChallenge: ['weakPasswordChallenge'],
@@ -28,7 +28,8 @@ const looselyCoupledChallenges = [
   ['easterEggLevelOneChallenge', 'forgottenDevBackupChallenge', 'forgottenBackupChallenge', 'misplacedSignatureFileChallenge'],
   ['uploadSizeChallenge', 'uploadTypeChallenge'],
   ['localXssChallenge', 'xssBonusChallenge'],
-  ['fileWriteChallenge', 'videoXssChallenge']
+  ['fileWriteChallenge', 'videoXssChallenge'],
+  ['misplacedIacFiles', 'iacLeakedKeyChallenge', 'vulnerableDockerImageChallenge']
 ]
 
 const trivialChallenges = ['errorHandlingChallenge', 'privacyPolicyChallenge', 'closeNotificationsChallenge']
@@ -36,7 +37,7 @@ const trivialChallenges = ['errorHandlingChallenge', 'privacyPolicyChallenge', '
 const solves: Array<{ challenge: any, phase: string, timestamp: Date, cheatScore: number }> = [{ challenge: {}, phase: 'server start', timestamp: new Date(), cheatScore: 0 }] // seed with server start timestamp
 
 const preSolveInteractions: Array<{ challengeKey: ChallengeKey, urlFragments: string[], interactions: boolean[] }> = [
-  { challengeKey: 'missingEncodingChallenge', urlFragments: ['/assets/public/images/uploads/%F0%9F%98%BC-'], interactions: [false] },
+  { challengeKey: 'missingEncodingChallenge', urlFragments: ['/assets/public/images/uploads/%E1%93%9A%E1%98%8F%E1%97%A2-'], interactions: [false] },
   { challengeKey: 'directoryListingChallenge', urlFragments: ['/ftp'], interactions: [false] },
   { challengeKey: 'easterEggLevelOneChallenge', urlFragments: ['/ftp', '/ftp/eastere.gg'], interactions: [false, false] },
   { challengeKey: 'easterEggLevelTwoChallenge', urlFragments: ['/ftp', '/gur/qrif/ner/fb/shaal/gurl/uvq/na/rnfgre/rtt/jvguva/gur/rnfgre/rtt'], interactions: [false, false] },
@@ -44,14 +45,25 @@ const preSolveInteractions: Array<{ challengeKey: ChallengeKey, urlFragments: st
   { challengeKey: 'forgottenBackupChallenge', urlFragments: ['/ftp', '/ftp/coupons_2013.md.bak'], interactions: [false, false] },
   { challengeKey: 'loginSupportChallenge', urlFragments: ['/ftp', '/ftp/incident-support.kdbx'], interactions: [false, false] },
   { challengeKey: 'misplacedSignatureFileChallenge', urlFragments: ['/ftp', '/ftp/suspicious_errors.yml'], interactions: [false, false] },
+  { challengeKey: 'misplacedIacFiles', urlFragments: ['/infrastructure'], interactions: [false] },
   { challengeKey: 'rceChallenge', urlFragments: ['/api-docs', '/b2b/v2/orders'], interactions: [false, false] },
   { challengeKey: 'rceOccupyChallenge', urlFragments: ['/api-docs', '/b2b/v2/orders'], interactions: [false, false] }
 ]
 
+const challengeSourceFiles: Record<string, string[]> = {
+  knownVulnerableComponentChallenge: ['ftp/package.json.bak'],
+  typosquattingNpmChallenge: ['ftp/package.json.bak'],
+  supplyChainAttackChallenge: ['ftp/package.json.bak'],
+  weirdCryptoChallenge: ['ftp/package.json.bak'],
+  vulnerableDockerImageChallenge: ['infrastructure/docker-compose.yml']
+}
+
 export const checkForPreSolveInteractions = () => ({ url }: Request, res: Response, next: NextFunction) => {
+  const normalizedPath = url.split('?')[0].toLowerCase()
   preSolveInteractions.forEach((preSolveInteraction) => {
     for (let i = 0; i < preSolveInteraction.urlFragments.length; i++) {
-      if (utils.endsWith(url, preSolveInteraction.urlFragments[i])) {
+      const fragment = preSolveInteraction.urlFragments[i].toLowerCase()
+      if (normalizedPath.endsWith(fragment) || normalizedPath.endsWith(`${fragment}/`)) {
         preSolveInteraction.interactions[i] = true
       }
     }
@@ -136,6 +148,12 @@ export const calculateFixItCheatScore = async (challenge: Challenge) => {
   return cheatScore
 }
 
+const median = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+}
+
 export const totalCheatScore = () => {
   return solves.length > 1 ? median(solves.map(({ cheatScore }) => cheatScore)) : 0
 }
@@ -174,7 +192,42 @@ export const reset = () => {
   })
 }
 
-const checkForIdenticalSolvedChallenge = async (challenge: Challenge): Promise<boolean> => {
+const sourceFileCache = new Map<string, string>()
+
+function loadSourceFile (relativePath: string): string {
+  if (sourceFileCache.has(relativePath)) {
+    return sourceFileCache.get(relativePath)!
+  }
+  try {
+    const content = fs.readFileSync(path.resolve(relativePath), 'utf8')
+    sourceFileCache.set(relativePath, content)
+    return content
+  } catch {
+    return ''
+  }
+}
+
+export function checkForSourceFileOverlap (challengeKey: string, submission: string): boolean {
+  const sourceFiles = challengeSourceFiles[challengeKey]
+  if (!sourceFiles || submission.length < 100) {
+    return false
+  }
+
+  for (const filePath of sourceFiles) {
+    const fileContent = loadSourceFile(filePath)
+    if (fileContent.length === 0) continue
+
+    const overlapScore = utils.diceCoefficient(submission.toLowerCase().trim(), fileContent.toLowerCase().trim())
+
+    if (overlapScore >= 0.75) {
+      logger.warn(`Detected source file overlap for ${colors.cyan(challengeKey)}: ${Math.round(overlapScore * 100)}% similarity with ${filePath}`)
+      return true
+    }
+  }
+  return false
+}
+
+export const checkForIdenticalSolvedChallenge = async (challenge: Challenge): Promise<boolean> => {
   const codingChallenges = await getCodeChallenges()
   if (!codingChallenges.has(challenge.key)) {
     return false

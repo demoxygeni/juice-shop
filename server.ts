@@ -13,9 +13,8 @@ import helmet from 'helmet'
 import http from 'node:http'
 import path from 'node:path'
 import express from 'express'
-import colors from 'colors/safe'
+import colors from './lib/colors'
 import serveIndex from 'serve-index'
-import bodyParser from 'body-parser'
 // @ts-expect-error FIXME due to non-existing type definitions for finale-rest
 import * as finale from 'finale-rest'
 import compression from 'compression'
@@ -54,6 +53,7 @@ import logger from './lib/logger'
 import * as utils from './lib/utils'
 import * as antiCheat from './lib/antiCheat'
 import * as security from './lib/insecurity'
+import { customizeTerraformContent } from './lib/terraformCustomization'
 import validateConfig from './lib/startup/validateConfig'
 import cleanupFtpFolder from './lib/startup/cleanupFtpFolder'
 import customizeEasterEgg from './lib/startup/customizeEasterEgg' // vuln-code-snippet hide-line
@@ -75,6 +75,7 @@ import { b2bOrder } from './routes/b2bOrder'
 import * as delivery from './routes/delivery'
 import * as recycles from './routes/recycles'
 import * as twoFactorAuth from './routes/2fa'
+import * as passkey from './routes/passkey'
 import { applyCoupon } from './routes/coupon'
 import dataErasure from './routes/dataErasure'
 import { dataExport } from './routes/dataExport'
@@ -88,6 +89,7 @@ import * as basketItems from './routes/basketItems'
 import { performRedirect } from './routes/redirect'
 import { serveEasterEgg } from './routes/easterEgg'
 import { getLanguageList } from './routes/languages'
+import { getTagGroups } from './routes/tags'
 import { getUserProfile } from './routes/userProfile'
 import { serveAngularClient } from './routes/angular'
 import { resetPassword } from './routes/resetPassword'
@@ -222,6 +224,9 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
     expires: securityTxtExpiration.toUTCString()
   }))
 
+  /* Passkey Endpoints (W3C) for password managers */
+  app.get('/.well-known/passkey-endpoints', passkey.passkeyEndpoints)
+
   /* robots.txt */
   app.use(robots({ UserAgent: '*', Disallow: '/ftp' }))
 
@@ -242,7 +247,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
     const origEnd = res.end
     // @ts-expect-error FIXME assignment broken due to seemingly void return value
     res.end = function () {
-      if (arguments.length) {
+      if (arguments.length && typeof arguments[0] === 'string') {
         const reqPath = req.originalUrl.replace(/\?.*$/, '')
 
         const currentFolder = reqPath.split('/').pop()!
@@ -263,6 +268,26 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
     }
     next()
   }
+
+  /* /infrastructure directory browsing */
+  app.use('/infrastructure', serveIndexMiddleware, serveIndex('infrastructure', { icons: true, view: 'details', filter: (filename) => filename !== 'README.md' }))
+  app.use('/infrastructure', verify.accessControlChallenges())
+  app.use('/infrastructure', (req: Request, res: Response, next: NextFunction) => {
+    const filePath = path.resolve('infrastructure', path.normalize(req.path).replace(/^[\\/]+/, ''))
+    if (!filePath.startsWith(path.resolve('infrastructure')) || filePath.endsWith('README.md')) {
+      return res.status(403).end()
+    }
+    if (filePath.endsWith('.tf') || filePath.endsWith('.yml') || filePath.endsWith('Dockerfile')) {
+      fs.readFile(filePath, 'utf8', (err, data) => {
+        if (err) return next()
+        const cleaned = data.split('\n').filter(line => !line.trim().match(/^#\s*vuln-code-snippet\s/)).map(line => line.replace(/\s*#\s*vuln-code-snippet\s.*$/, '')).join('\n')
+        const content = filePath.endsWith('.tf') ? customizeTerraformContent(cleaned) : cleaned
+        res.type('text/plain').send(content)
+      })
+    } else {
+      express.static('infrastructure')(req, res, next)
+    }
+  })
 
   // vuln-code-snippet start directoryListingChallenge accessLogDisclosureChallenge
   /* /ftp directory browsing and file download */ // vuln-code-snippet neutral-line directoryListingChallenge
@@ -285,7 +310,14 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   /* Swagger documentation for B2B v2 endpoints */
   app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument))
 
-  app.use(express.static(path.resolve('frontend/dist/frontend')))
+  /* Express 4 ships mime@1.x which predates AVIF, so .avif would be served as application/octet-stream */
+  const setStaticFileHeaders = (res: http.ServerResponse, filePath: string) => {
+    if (path.extname(filePath) === '.avif') {
+      res.setHeader('Content-Type', 'image/avif')
+    }
+  }
+
+  app.use(express.static(path.resolve('frontend/dist/frontend'), { setHeaders: setStaticFileHeaders }))
   app.use(cookieParser('kekse'))
   // vuln-code-snippet end directoryListingChallenge accessLogDisclosureChallenge
 
@@ -300,18 +332,18 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
     directory: path.resolve('i18n'),
     cookie: 'language',
     defaultLocale: 'en',
-    autoReload: true
+    autoReload: process.env.NODE_ENV !== 'test'
   })
   app.use(i18n.init)
 
-  app.use(bodyParser.urlencoded({ extended: true }))
+  app.use(express.urlencoded({ extended: true }))
   /* File Upload */
   app.post('/file-upload', uploadToMemory.single('file'), ensureFileIsPassed, metrics.observeFileUploadMetricsMiddleware(), checkUploadSize, checkFileType, handleZipFileUpload, handleXmlUpload, handleYamlUpload)
   app.post('/profile/image/file', uploadToMemory.single('file'), ensureFileIsPassed, metrics.observeFileUploadMetricsMiddleware(), utils.asyncHandler(profileImageFileUpload()))
   app.post('/profile/image/url', uploadToMemory.single('file'), utils.asyncHandler(profileImageUrlUpload()))
   app.post('/rest/memories', uploadToDisk.single('image'), ensureFileIsPassed, security.appendUserId(), metrics.observeFileUploadMetricsMiddleware(), utils.asyncHandler(addMemory()))
 
-  app.use(bodyParser.text({ type: '*/*' }))
+  app.use(express.text({ type: '*/*' }))
   app.use(function jsonParser (req: Request, res: Response, next: NextFunction) {
     // @ts-expect-error FIXME intentionally saving original request in this property
     req.rawBody = req.body
@@ -351,6 +383,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   /** Authorization **/
   /* Checks on JWT in Authorization header */ // vuln-code-snippet hide-line
   app.use(verify.jwtChallenges()) // vuln-code-snippet hide-line
+  app.use(security.updateAuthenticatedUsers()) // vuln-code-snippet hide-line
   /* Baskets: Unauthorized users are not allowed to access baskets */
   app.use('/rest/basket', security.isAuthorized(), security.appendUserId())
   /* BasketItems: API only accessible for authenticated users */
@@ -472,6 +505,13 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
     security.isAuthorized(),
     utils.asyncHandler(twoFactorAuth.disable)
   )
+  /* Passkey (WebAuthn) registration requires an authenticated session; sign-in must be public. */
+  app.get('/rest/passkey/register-options', security.isAuthorized(), utils.asyncHandler(passkey.registerOptions))
+  app.post('/rest/passkey/register-verify', security.isAuthorized(), utils.asyncHandler(passkey.registerVerify))
+  app.post('/rest/passkey/login-options', utils.asyncHandler(passkey.loginOptions))
+  app.post('/rest/passkey/login-verify', utils.asyncHandler(passkey.loginVerify))
+  app.get('/rest/passkey/credentials', security.isAuthorized(), utils.asyncHandler(passkey.listCredentials))
+  app.delete('/rest/passkey/credentials/:id', security.isAuthorized(), utils.asyncHandler(passkey.deleteCredential))
   /* Verifying DB related challenges can be postponed until the next request for challenges is coming via finale */
   app.use(verify.databaseRelatedChallenges())
 
@@ -521,7 +561,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
       resource.list.fetch.after((req: Request, res: Response, context: { instance: string | any[], continue: any }) => {
         for (let i = 0; i < context.instance.length; i++) {
           let description = context.instance[i].description
-          if (utils.contains(description, '<em>(This challenge is <strong>')) {
+          if (description?.includes('<em>(This challenge is <strong>')) {
             const warning = description.substring(description.indexOf(' <em>(This challenge is <strong>'))
             description = description.substring(0, description.indexOf(' <em>(This challenge is <strong>'))
             context.instance[i].description = req.__(description) + req.__(warning)
@@ -596,7 +636,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.get('/rest/user/change-password', utils.asyncHandler(changePassword()))
   app.post('/rest/user/reset-password', utils.asyncHandler(resetPassword()))
   app.get('/rest/user/security-question', utils.asyncHandler(securityQuestion()))
-  app.get('/rest/user/whoami', security.updateAuthenticatedUsers(), utils.asyncHandler(retrieveLoggedInUser()))
+  app.get('/rest/user/whoami', utils.asyncHandler(retrieveLoggedInUser()))
   app.get('/rest/user/authentication-details', utils.asyncHandler(authenticatedUsers()))
   app.get('/rest/products/search', utils.asyncHandler(searchProducts()))
   app.get('/rest/basket/:id', utils.asyncHandler(retrieveBasket()))
@@ -619,6 +659,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.post('/rest/user/data-export', security.appendUserId(), utils.asyncHandler(verifyImageCaptcha()))
   app.post('/rest/user/data-export', security.appendUserId(), utils.asyncHandler(dataExport()))
   app.get('/rest/languages', utils.asyncHandler(getLanguageList()))
+  app.get('/rest/tags', utils.asyncHandler(getTagGroups()))
   app.get('/rest/order-history', utils.asyncHandler(orderHistory()))
   app.get('/rest/order-history/orders', security.isAccounting(), utils.asyncHandler(allOrders()))
   app.put('/rest/order-history/:id/delivery-status', security.isAccounting(), utils.asyncHandler(toggleDeliveryStatus()))
@@ -662,7 +703,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.get('/video', getVideo())
 
   /* Routes for profile page */
-  app.get('/profile', security.updateAuthenticatedUsers(), utils.asyncHandler(getUserProfile()))
+  app.get('/profile', utils.asyncHandler(getUserProfile()))
   app.post('/profile', utils.asyncHandler(updateUserProfile()))
 
   /* Route for vulnerable code snippets */
@@ -670,6 +711,9 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.post('/snippets/verdict', utils.asyncHandler(checkVulnLines()))
   app.get('/snippets/fixes/:key', utils.asyncHandler(serveCodeFixes()))
   app.post('/snippets/fixes', utils.asyncHandler(checkCorrectFix()))
+
+  /* Serve metrics before the Angular catch-all so the route is reachable in all environments */
+  app.get('/metrics', utils.asyncHandler(metrics.serveMetrics()))
 
   app.use(utils.asyncHandler(serveAngularClient()))
 
@@ -679,11 +723,13 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
 }
 
 // Function called first to ensure that all the i18n files are reloaded successfully before other linked operations.
-restoreOverwrittenFilesWithOriginals().then(() => {
-  configureApp(app, sequelize)
-}).catch((err) => {
-  console.error(err)
-})
+if (process.env.NODE_ENV !== 'test') {
+  restoreOverwrittenFilesWithOriginals().then(() => {
+    configureApp(app, sequelize)
+  }).catch((err) => {
+    console.error(err)
+  })
+}
 
 const uploadToMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200000 } })
 const mimeTypeMap: any = {
@@ -712,7 +758,7 @@ const uploadToDisk = multer({
   })
 })
 
-const expectedModels = ['Address', 'Basket', 'BasketItem', 'Captcha', 'Card', 'Challenge', 'ChallengeDependency', 'Complaint', 'Delivery', 'Feedback', 'ImageCaptcha', 'Memory', 'PrivacyRequestModel', 'Product', 'Quantity', 'Recycle', 'SecurityAnswer', 'SecurityQuestion', 'User', 'Wallet', 'Hint']
+const expectedModels = ['Address', 'Basket', 'BasketItem', 'Captcha', 'Card', 'Challenge', 'ChallengeDependency', 'Complaint', 'Delivery', 'Feedback', 'ImageCaptcha', 'Memory', 'PrivacyRequestModel', 'Product', 'Quantity', 'Recycle', 'SecurityAnswer', 'SecurityQuestion', 'User', 'Wallet', 'Hint', 'Passkey']
 while (!expectedModels.every(model => Object.keys(sequelize.models).includes(model))) {
   logger.info(`Entity models ${colors.bold(Object.keys(sequelize.models).length.toString())} of ${colors.bold(expectedModels.length.toString())} are initialized (${colors.yellow('WAITING')})`)
 }
@@ -776,6 +822,7 @@ export async function createApp (options?: { inMemoryDb?: boolean }) {
   Prometheus.register.clear()
   const testApp = express()
   testApp.set('view engine', 'hbs')
+  await restoreOverwrittenFilesWithOriginals()
   configureApp(testApp, seq)
   await seq.sync({ force: true })
   await datacreator()

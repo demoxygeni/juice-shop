@@ -9,6 +9,7 @@ import request from 'supertest'
 import type { Express } from 'express'
 import { createTestApp } from './helpers/setup'
 import { login } from './helpers/auth'
+import { QuantityModel } from '../../models/quantity'
 
 let app: Express
 let authHeader: { Authorization: string, 'content-type': string }
@@ -71,6 +72,23 @@ void describe('/api/BasketItems', () => {
       .send({ BasketId: 2, ProductId: 1, quantity: 6 })
     assert.equal(res.status, 400)
     assert.equal(res.body.error, 'You can order only up to 5 items of this product.')
+  })
+
+  void it('POST new basket item with invalid basket ID is forbidden', async () => {
+    const res = await request(app)
+      .post('/api/BasketItems')
+      .set(authHeader)
+      .send({ BasketId: 42, ProductId: 1, quantity: 1 })
+    assert.equal(res.status, 401)
+    assert.equal(res.text, "{'error' : 'Invalid BasketId'}")
+  })
+
+  void it('POST new basket item with non-existent product ID is forbidden', async () => {
+    const res = await request(app)
+      .post('/api/BasketItems')
+      .set(authHeader)
+      .send({ BasketId: 2, ProductId: 999, quantity: 1 })
+    assert.equal(res.status, 500) // quantityCheck throws Error which is caught and passed to next(error)
   })
 })
 
@@ -209,5 +227,29 @@ void describe('/api/BasketItems/:id', () => {
       .delete('/api/BasketItems/' + createRes.body.data.id)
       .set(authHeader)
     assert.equal(res.status, 200)
+  })
+
+  void it('PUT update non-existent basket item', async () => {
+    const res = await request(app)
+      .put('/api/BasketItems/999')
+      .set(authHeader)
+      .send({ quantity: 1 })
+    assert.equal(res.status, 500)
+  })
+
+  void it('PUT update basket item with failing quantity lookup returns 500', async (t) => {
+    const createRes = await request(app)
+      .post('/api/BasketItems')
+      .set(authHeader)
+      .send({ BasketId: 2, ProductId: 11, quantity: 2 })
+    assert.equal(createRes.status, 200)
+
+    t.mock.method(QuantityModel, 'findOne', () => { throw new Error('Quantity error') })
+    const res = await request(app)
+      .put('/api/BasketItems/' + createRes.body.data.id)
+      .set(authHeader)
+      .send({ quantity: 3 })
+    assert.equal(res.status, 500)
+    assert.match(res.text, /Quantity error/)
   })
 })
